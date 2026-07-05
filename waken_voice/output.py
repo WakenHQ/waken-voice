@@ -1,5 +1,5 @@
-"""The `VoiceOutput` — synthesizes a `Response`'s text to speech via OpenAI's
-TTS API and writes it to disk, optionally playing it back.
+"""The `VoiceOutput` — synthesizes a `Response`'s text to speech via a
+pluggable `Synthesizer` and writes it to disk, optionally playing it back.
 
 See docs/api-spec.md §7 (Writing an Output) in the main `waken` repo for the
 conceptual model.
@@ -11,9 +11,9 @@ import asyncio
 import logging
 import platform
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from openai import AsyncOpenAI
+from waken_voice.synthesizers import OpenAITTSSynthesizer, Synthesizer
 
 if TYPE_CHECKING:
     from waken.events import Event
@@ -27,7 +27,7 @@ class VoiceOutput:
 
     A `Response` with no `text` (e.g. a `Target` that only returned `files`)
     delivers nothing — skipped silently rather than sending an empty string
-    to the TTS API, which would error.
+    to the synthesizer, which would error.
 
     Playback (`play=True`, the default) is **best-effort and untested
     against real audio hardware/OS combinations.** `_play` shells out to a
@@ -44,34 +44,22 @@ class VoiceOutput:
         self,
         output_dir: str | Path,
         *,
-        voice: str = "alloy",
-        model: str = "tts-1",
+        synthesizer: Synthesizer | None = None,
         play: bool = True,
-        **client_kwargs: Any,
     ) -> None:
         self.output_dir = Path(output_dir)
-        self.voice = voice
-        self.model = model
+        self.synthesizer: Synthesizer = synthesizer or OpenAITTSSynthesizer()
         self.play = play
-        self._client = AsyncOpenAI(**client_kwargs)
 
     async def deliver(self, event: Event, response: Response) -> None:
         if not response.text:
             return
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        audio_bytes = await self._synthesize(response.text)
+        audio_bytes = await self.synthesizer.synthesize(response.text)
         path = self.output_dir / f"{event.event_id}.mp3"
         path.write_bytes(audio_bytes)
         if self.play:
             await self._play(path)
-
-    async def _synthesize(self, text: str) -> bytes:
-        speech = await self._client.audio.speech.create(
-            model=self.model,
-            voice=self.voice,
-            input=text,
-        )
-        return speech.content
 
     async def _play(self, path: Path) -> None:
         """Best-effort playback via a platform audio player.

@@ -7,9 +7,10 @@ Voice [Source and Output](https://github.com/WakenHQ/waken) for
 [Waken](https://github.com/WakenHQ/waken) — "nginx for AI agents." Unlike
 `waken-claude`/`waken-gemini`/`waken-copilot`, this package doesn't wrap an
 AI backend at all: it wraps a *channel*. `VoiceSource` turns an audio file
-into an `Event`; `VoiceOutput` turns a `Response` back into audio. Both are
-backed by OpenAI's audio API (Whisper for speech-to-text, TTS for
-text-to-speech).
+into an `Event`; `VoiceOutput` turns a `Response` back into audio. Both talk
+to a pluggable backend — OpenAI (Whisper + TTS) by default, or swap in Groq
+(Whisper-backed transcription) and/or `gTTS` (free, no-API-key speech
+synthesis).
 
 ## What this is NOT: a live microphone listener
 
@@ -28,15 +29,26 @@ built on.
 ## Install
 
 ```bash
-pip install waken-voice
+pip install "waken-voice[openai]"   # default: Whisper + TTS via OpenAI
+pip install "waken-voice[groq]"     # transcription via Groq instead
+pip install "waken-voice[gtts]"     # synthesis via gTTS instead (free, no key)
 ```
 
-Needs an OpenAI API key: set `OPENAI_API_KEY` in the environment (the
-default the underlying `openai` SDK reads), or pass `api_key=...` as a
-keyword argument to `VoiceSource`/`VoiceOutput` — both forward unrecognized
-keyword arguments straight to `openai.AsyncOpenAI(...)`.
+Each provider is an extra, not a hard dependency — install only the ones
+you use. `openai`, `groq`, and `gtts` can all be combined in one install
+(e.g. `pip install "waken-voice[groq,gtts]"` for a fully OpenAI-free setup).
+
+- **OpenAI**: set `OPENAI_API_KEY` in the environment, or pass
+  `api_key=...` to `OpenAIWhisperTranscriber`/`OpenAITTSSynthesizer`.
+- **Groq**: set `GROQ_API_KEY`, or pass `api_key=...` to
+  `GroqWhisperTranscriber`.
+- **gTTS**: no API key — it calls Google Translate's public (undocumented)
+  TTS endpoint directly.
 
 ## Usage
+
+Default (OpenAI for both directions — no `transcriber`/`synthesizer`
+arguments needed):
 
 ```python
 from waken import Runtime
@@ -47,6 +59,30 @@ runtime = Runtime()
 runtime.target("openai", OpenAIAdapter())
 runtime.source("voice-in", VoiceSource(watch="./voice-inbox", target="openai"))
 runtime.output("voice-in", VoiceOutput(output_dir="./voice-outbox"))
+runtime.run()
+```
+
+Groq for transcription, `gTTS` for synthesis:
+
+```python
+from waken import Runtime
+from waken_openai import OpenAIAdapter
+from waken_voice import VoiceSource, VoiceOutput, GroqWhisperTranscriber, GTTSSynthesizer
+
+runtime = Runtime()
+runtime.target("openai", OpenAIAdapter())
+runtime.source(
+    "voice-in",
+    VoiceSource(
+        watch="./voice-inbox",
+        target="openai",
+        transcriber=GroqWhisperTranscriber(),  # reads GROQ_API_KEY
+    ),
+)
+runtime.output(
+    "voice-in",
+    VoiceOutput(output_dir="./voice-outbox", synthesizer=GTTSSynthesizer(lang="en")),
+)
 runtime.run()
 ```
 
@@ -61,16 +97,44 @@ by default; see [`docs/api-spec.md`
 and [§9](https://github.com/WakenHQ/waken/blob/main/docs/api-spec.md#9-error-handling)
 in the main `waken` repo for the full delivery-resolution rule.
 
+## Providers
+
+`VoiceSource` takes a `Transcriber` (anything with an async `transcribe(path)
+-> str` method); `VoiceOutput` takes a `Synthesizer` (anything with an async
+`synthesize(text) -> bytes` method). Both are plain `Protocol`s, not base
+classes — write your own by matching the method signature, same
+name-keyed-object philosophy as `runtime.target("claude", ClaudeAdapter())`
+in core Waken.
+
+| | Transcriber (STT) | Synthesizer (TTS) |
+|---|---|---|
+| **OpenAI** | `OpenAIWhisperTranscriber(model="whisper-1", **client_kwargs)` | `OpenAITTSSynthesizer(voice="alloy", model="tts-1", **client_kwargs)` |
+| **Groq** | `GroqWhisperTranscriber(model="whisper-large-v3", **client_kwargs)` | — Groq has no TTS endpoint |
+| **gTTS** | — Google Translate's TTS endpoint doesn't do STT | `GTTSSynthesizer(lang="en", **gtts_kwargs)` |
+
+`**client_kwargs` forwards to the provider's own async client
+(`openai.AsyncOpenAI(...)` / `groq.AsyncGroq(...)`); `**gtts_kwargs` forwards
+to `gtts.gTTS(...)` (e.g. `slow=True`). Each class imports its SDK lazily on
+construction, so you only need the extra actually installed for whichever
+class you use.
+
+`gTTS` is worth knowing the shape of before relying on it: it's a thin
+wrapper around Google Translate's public but undocumented TTS endpoint, not
+an official API with an uptime or rate-limit contract, and it offers a
+fixed accent-per-language voice rather than named-voice selection like
+OpenAI's `alloy`/`nova`/... It's genuinely free and requires no signup,
+which is the whole appeal — just don't reach for it if you need guaranteed
+availability or voice control.
+
 ## `VoiceSource`
 
 ```python
 VoiceSource(
-    watch,              # directory to poll for new audio files
-    target,             # name of the registered Target to dispatch to
-    interval=1.0,       # poll interval, seconds
+    watch,                  # directory to poll for new audio files
+    target,                 # name of the registered Target to dispatch to
+    interval=1.0,           # poll interval, seconds
     source_name="voice",
-    model="whisper-1",  # OpenAI transcription model
-    **client_kwargs,    # forwarded to openai.AsyncOpenAI(...)
+    transcriber=None,       # a Transcriber; defaults to OpenAIWhisperTranscriber()
 )
 ```
 
@@ -80,18 +144,16 @@ built-in `FilesystemSource` (see
 no OS-level file-watching dependency, files present before `start()` are the
 baseline and never fire. Only `.wav`, `.mp3`, `.m4a`, and `.ogg` files are
 transcribed; anything else is ignored silently, since handing a non-audio
-file to the transcription API is a guaranteed, pointless error rather than a
+file to a transcriber is a guaranteed, pointless error rather than a
 useful attempt.
 
 ## `VoiceOutput`
 
 ```python
 VoiceOutput(
-    output_dir,        # directory to write synthesized audio into
-    voice="alloy",     # OpenAI TTS voice
-    model="tts-1",     # OpenAI TTS model
-    play=True,         # attempt local playback after writing the file
-    **client_kwargs,   # forwarded to openai.AsyncOpenAI(...)
+    output_dir,          # directory to write synthesized audio into
+    synthesizer=None,    # a Synthesizer; defaults to OpenAITTSSynthesizer()
+    play=True,           # attempt local playback after writing the file
 )
 ```
 
@@ -121,7 +183,9 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Tests mock `openai.AsyncOpenAI` and `VoiceOutput._play` entirely — no real
+`dev` pulls in `openai`, `groq`, and `gtts` together so the full suite can
+run. Tests mock each provider's SDK client (`openai.AsyncOpenAI`,
+`groq.AsyncGroq`, `gtts.gTTS`) and `VoiceOutput._play` entirely — no real
 network access, API key, or audio hardware is required to run them.
 
 ## License

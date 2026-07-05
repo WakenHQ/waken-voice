@@ -1,5 +1,5 @@
 """The `VoiceSource` — dispatches one `Event` per new audio file appearing
-under `watch`, transcribed to text via OpenAI's audio transcription API.
+under `watch`, transcribed to text by a pluggable `Transcriber`.
 
 Mirrors `waken.plugins.sources.filesystem.FilesystemSource`'s shape exactly
 (see docs/api-spec.md §4 Sessions and §6 Writing a Source in the main `waken`
@@ -21,10 +21,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from openai import AsyncOpenAI
 from waken.events import Event
+
+from waken_voice.transcribers import OpenAIWhisperTranscriber, Transcriber
 
 if TYPE_CHECKING:
     from waken.runtime import Runtime
@@ -37,10 +38,10 @@ class VoiceSource:
 
     Polls on `interval` seconds rather than an OS-level file-watching
     library, same reasoning as `FilesystemSource`: no new dependency for the
-    watching mechanism itself (`openai` is only needed for the transcription
-    call). Files already present when `start()` runs are the baseline, not
-    new arrivals, and never fire. Files without a recognized audio extension
-    are skipped silently rather than sent to the transcription API.
+    watching mechanism itself. Files already present when `start()` runs
+    are the baseline, not new arrivals, and never fire. Files without a
+    recognized audio extension are skipped silently rather than sent to the
+    transcriber.
     """
 
     def __init__(
@@ -50,15 +51,13 @@ class VoiceSource:
         *,
         interval: float = 1.0,
         source_name: str = "voice",
-        model: str = "whisper-1",
-        **client_kwargs: Any,
+        transcriber: Transcriber | None = None,
     ) -> None:
         self.watch = Path(watch)
         self.target = target
         self.interval = interval
         self.source_name = source_name
-        self.model = model
-        self._client = AsyncOpenAI(**client_kwargs)
+        self.transcriber: Transcriber = transcriber or OpenAIWhisperTranscriber()
         self._seen: set[Path] = set()
         self._task: asyncio.Task[None] | None = None
 
@@ -80,7 +79,7 @@ class VoiceSource:
             for path in sorted(current - self._seen):
                 if path.suffix.lower() not in _AUDIO_EXTENSIONS:
                     continue
-                text = await self._transcribe(path)
+                text = await self.transcriber.transcribe(path)
                 event = Event(
                     source=self.source_name,
                     target=self.target,
@@ -92,11 +91,3 @@ class VoiceSource:
                 # the loop noticing the next one.
                 asyncio.create_task(runtime.dispatch(event, retry=True))
             self._seen = current
-
-    async def _transcribe(self, path: Path) -> str:
-        with path.open("rb") as audio_file:
-            transcription = await self._client.audio.transcriptions.create(
-                model=self.model,
-                file=audio_file,
-            )
-        return transcription.text
