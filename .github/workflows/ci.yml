@@ -13,7 +13,13 @@ jobs:
         with:
           python-version: ${{ vars.PYTHON_VERSION || '3.12' }}
       - name: Install
-        run: pip install -e ".[dev]"
+        run: |
+          pip install -e ".[dev]"
+          # openwakeword unconditionally depends on tflite-runtime on Linux,
+          # which has no wheel for this Python version; --no-deps skips that
+          # (its actual runtime deps are already covered by the dev extra).
+          # See the README's Install section for the full explanation.
+          pip install --no-deps openwakeword
       - name: Lint
         run: ruff check .
       - name: Format check

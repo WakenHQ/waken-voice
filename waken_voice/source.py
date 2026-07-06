@@ -11,9 +11,9 @@ directly, exactly like any other prompt-shaped Event.
 
 Scope: this is a file-drop channel — something else (a phone system, a
 Telegram/Slack voice-message webhook, a push-to-talk recorder, ...) is
-responsible for actually producing the audio file on disk. This is
-deliberately *not* a live microphone listener; see the package README for
-why.
+responsible for actually producing the audio file on disk. For live
+microphone input with wake-word detection, see `MicrophoneSource` in
+`waken_voice.microphone` instead.
 """
 
 from __future__ import annotations
