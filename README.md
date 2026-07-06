@@ -60,7 +60,14 @@ OpenAI-free setup).
   TTS endpoint directly.
 - **mic**: no API key — `openwakeword` runs its pretrained ONNX models
   locally, and `sounddevice` talks to your OS's audio input (PortAudio)
-  directly. Two things this needs beyond the extra above:
+  directly. Three things this needs beyond the extra above:
+  - **PortAudio itself must be installed as a system library** —
+    `sounddevice` wraps it via a compiled extension, so the pip package
+    alone isn't enough. On Debian/Ubuntu: `sudo apt-get install
+    libportaudio2`. On macOS: `brew install portaudio`. (Already present
+    on most desktop Linux/macOS installs; bare containers and CI images
+    are the case that needs this explicitly — see this repo's own
+    `ci.yml`.)
   - **`openwakeword` itself needs `--no-deps`.** Upstream, it
     unconditionally depends on `tflite-runtime` on Linux, which has no
     published wheel for Python 3.12+ — a plain `pip install openwakeword`
