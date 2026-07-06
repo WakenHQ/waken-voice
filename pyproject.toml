@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "waken-voice"
 version = "0.2.0"
-description = "Voice Source/Output for Waken — file-drop speech-to-text in, text-to-speech out, via pluggable providers (OpenAI, Groq, gTTS)."
+description = "Voice Source/Output for Waken — file-drop and live-microphone speech-to-text in, text-to-speech out, via pluggable providers (OpenAI, Groq, gTTS, openWakeWord)."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
@@ -32,6 +32,21 @@ Issues = "https://github.com/WakenHQ/waken-voice/issues"
 openai = ["openai>=1.0.0"]
 groq = ["groq>=0.11.0"]
 gtts = ["gtts>=2.5.0"]
+# openwakeword itself is *not* listed here on purpose: it unconditionally
+# depends on `tflite-runtime` on Linux, which has no published wheel for
+# Python 3.12+, so pip would fail to resolve this extra at all. Install it
+# separately with `pip install --no-deps openwakeword` (see the README) —
+# these are its actual runtime dependencies, minus tflite-runtime, which
+# `OpenWakeWordDetector` never needs since it defaults to the ONNX backend.
+mic = [
+    "sounddevice>=0.5.0",
+    "numpy>=1.26",
+    "onnxruntime>=1.10.0,<2",
+    "tqdm>=4.0,<5.0",
+    "scipy>=1.3,<2",
+    "scikit-learn>=1,<2",
+    "requests>=2.0,<3",
+]
 dev = [
     "ruff>=0.6",
     "mypy>=1.11",
@@ -40,6 +55,13 @@ dev = [
     "openai>=1.0.0",
     "groq>=0.11.0",
     "gtts>=2.5.0",
+    "sounddevice>=0.5.0",
+    "numpy>=1.26",
+    "onnxruntime>=1.10.0,<2",
+    "tqdm>=4.0,<5.0",
+    "scipy>=1.3,<2",
+    "scikit-learn>=1,<2",
+    "requests>=2.0,<3",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -61,6 +83,12 @@ packages = ["waken_voice"]
 # gTTS ships no type stubs or py.typed marker; only touched inside
 # GTTSSynthesizer's lazy import, isolated from the rest of the package.
 module = "gtts.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# sounddevice and openwakeword ship no type stubs or py.typed marker;
+# only touched inside MicrophoneSource/OpenWakeWordDetector's lazy imports.
+module = ["sounddevice.*", "openwakeword.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
