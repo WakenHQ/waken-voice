@@ -15,7 +15,6 @@ import asyncio
 import contextlib
 import logging
 import tempfile
-import wave
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -23,14 +22,14 @@ from uuid import uuid4
 from waken.events import Event
 
 from waken_voice.transcribers import OpenAIWhisperTranscriber, Transcriber
+from waken_voice.util import rms as _rms
+from waken_voice.util import write_wav as _write_wav
 from waken_voice.wakeword import OpenWakeWordDetector, WakeWordDetector
 
 if TYPE_CHECKING:
     from waken.runtime import Runtime
 
 log = logging.getLogger("waken_voice.microphone")
-
-_SAMPLE_WIDTH = 2  # bytes per sample, 16-bit PCM
 
 
 class MicrophoneSource:
@@ -191,20 +190,3 @@ class MicrophoneSource:
         # slow retry-with-backoff sequence for one utterance must not stall
         # the loop noticing the next wake word.
         asyncio.create_task(runtime.dispatch(event, retry=True))
-
-
-def _rms(frame: bytes) -> float:
-    import numpy as np
-
-    samples = np.frombuffer(frame, dtype=np.int16).astype(np.float64)
-    if samples.size == 0:
-        return 0.0
-    return float(np.sqrt(np.mean(samples**2)))
-
-
-def _write_wav(path: Path, pcm_bytes: bytes, sample_rate: int) -> None:
-    with wave.open(str(path), "wb") as wav_file:
-        wav_file.setnchannels(1)
-        wav_file.setsampwidth(_SAMPLE_WIDTH)
-        wav_file.setframerate(sample_rate)
-        wav_file.writeframes(pcm_bytes)
